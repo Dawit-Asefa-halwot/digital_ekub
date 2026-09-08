@@ -5,6 +5,7 @@ import '../models/user_model.dart';
 import '../widgets/contribute_dialog.dart';
 import '../widgets/create_ekub_dialog.dart';
 import '../widgets/transaction_detail_dialog.dart';
+import '../widgets/reminder_center_sheet.dart';
 import 'ekub_details_screen.dart';
 
 /// Interactive Home Screen for Digital Ekub.
@@ -95,19 +96,13 @@ class HomeScreen extends StatelessWidget {
             ),
             actions: [
               IconButton(
-                icon: Icon(
-                  user.notificationsEnabled ? Icons.notifications_active_rounded : Icons.notifications_off_outlined,
-                ),
-                tooltip: 'Notifications',
+                icon: const Icon(Icons.notifications_active_rounded),
+                tooltip: 'Reminders & Notifications',
                 onPressed: () {
-                  AuthService.instance.toggleNotifications(!user.notificationsEnabled);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        user.notificationsEnabled ? '🔔 Notifications enabled' : '🔕 Notifications muted',
-                      ),
-                      duration: const Duration(seconds: 1),
-                    ),
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    builder: (context) => const ReminderCenterSheet(),
                   );
                 },
               ),

@@ -1,0 +1,322 @@
+// Prisma Schema for Digital Ekub (PostgreSQL 18)
+// Defines core domain entities, financial constraints, and relations.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum UserRole {
+  MEMBER
+  ADMIN
+}
+
+enum EkubCategory {
+  POPULAR
+  GROUP
+  CORPORATE
+  IN_KIND
+}
+
+enum EkubType {
+  CASH
+  IN_KIND
+}
+
+enum EkubStatus {
+  ACTIVE
+  COMPLETED
+  CLOSED
+}
+
+enum Frequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  TELEBIRR
+  CBE_BIRR
+  BANK_TRANSFER
+}
+
+enum TransactionType {
+  CONTRIBUTION_DEPOSIT
+  POT_PAYOUT_RECEIVED
+  EKUB_CREATION_FEE
+}
+
+enum TransactionStatus {
+  SUCCESSFUL
+  PENDING
+  FAILED
+}
+
+enum RoundStatus {
+  SCHEDULED
+  CURRENT
+  COMPLETED
+}
+
+enum ReminderStatus {
+  UPCOMING
+  DUE
+  OVERDUE
+  PAID
+}
+
+// ==========================================
+// MODELS & ENTITIES
+// ==========================================
+
+/// User Entity
+model User {
+  id                   String         @id @default(uuid())
+  name                 String
+  email                String         @unique
+  phone                String         @unique
+  passwordHash         String         // Passwords are stored as salted hashes only
+  role                 UserRole       @default(MEMBER)
+  isVerified           Boolean        @default(true)
+  notificationsEnabled Boolean        @default(true)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  // Relations
+  createdEkubs         Ekub[]         @relation("EkubCreator")
+  ekubMemberships      EkubMember[]
+  contributions        Contribution[]
+  transactions         Transaction[]
+  drawWins             DrawResult[]   @relation("WinnerUser")
+  reminders            Reminder[]
+  notifications        Notification[]
+
+  @@map("users")
+}
+
+/// In-Kind Product Entity (Featured product for In-Kind Ekubs)
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String
+  imageUrl    String?
+  productValue Decimal @db.Decimal(12, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  ekubs       Ekub[]
+
+  @@map("products")
+}
+
+/// Ekub Group Entity
+model Ekub {
+  id                 String       @id @default(uuid())
+  name               String
+  description        String
+  category           EkubCategory @default(GROUP)
+  type               EkubType     @default(CASH)
+  contributionAmount Decimal      @db.Decimal(12, 2)
+  frequency          Frequency    @default(MONTHLY)
+  maxMembers         Int
+  joinedMembersCount Int          @default(0)
+  currentRound       Int          @default(1)
+  totalRounds        Int
+  totalPot           Decimal      @db.Decimal(12, 2)
+  nextRecipient      String?
+  nextDrawDate       DateTime?
+  status             EkubStatus   @default(ACTIVE)
+
+  // Relations
+  productId          String?
+  product            Product?     @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  createdById        String
+  createdBy          User         @relation("EkubCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  members            EkubMember[]
+  rounds             Round[]
+  contributions      Contribution[]
+  transactions       Transaction[]
+  drawResults        DrawResult[]
+  reminders          Reminder[]
+  auditEvents        AuditEvent[]
+
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@map("ekubs")
+}
+
+/// Ekub Member Roster Relationship
+model EkubMember {
+  id                String        @id @default(uuid())
+  userId            String
+  ekubId            String
+  turnNumber        Int
+  hasReceivedPot    Boolean       @default(false)
+  paymentStatus     PaymentStatus @default(PENDING)
+  amountContributed Decimal       @default(0.00) @db.Decimal(12, 2)
+  joinedAt          DateTime      @default(now())
+
+  // Relations
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ekub              Ekub          @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+
+  // FINANCIAL RULE: A user cannot join the same Ekub twice
+  @@unique([userId, ekubId])
+  @@map("ekub_members")
+}
+
+/// Ekub Round Lifecycle Entity
+model Round {
+  id            String      @id @default(uuid())
+  ekubId        String
+  roundNumber   Int
+  drawDate      DateTime
+  status        RoundStatus @default(SCHEDULED)
+  createdAt     DateTime    @default(now())
+
+  // Relations
+  ekub          Ekub        @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+  contributions Contribution[]
+  drawResult    DrawResult?
+
+  // FINANCIAL RULE: One round per round number in an Ekub
+  @@unique([ekubId, roundNumber])
+  @@map("rounds")
+}
+
+/// Contribution Deposit Record Entity
+model Contribution {
+  id            String        @id @default(uuid())
+  userId        String
+  ekubId        String
+  roundId       String?
+  roundNumber   Int
+  amount        Decimal       @db.Decimal(12, 2)
+  status        PaymentStatus @default(PENDING)
+  transactionId String?
+  paidAt        DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+
+  // Relations
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ekub          Ekub          @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+  round         Round?        @relation(fields: [roundId], references: [id], onDelete: SetNull)
+
+  // FINANCIAL RULE: A member cannot make duplicate contributions for the same Ekub round
+  @@unique([userId, ekubId, roundNumber])
+  @@map("contributions")
+}
+
+/// Financial Ledger Transaction Entity
+model Transaction {
+  id            String            @id @default(uuid())
+  referenceId   String            @unique // Unique payment reference ID (e.g. TXN-TEL-89210)
+  userId        String
+  ekubId        String
+  amount        Decimal           @db.Decimal(12, 2)
+  type          TransactionType
+  paymentMethod PaymentMethod     @default(TELEBIRR)
+  status        TransactionStatus @default(SUCCESSFUL)
+  description   String
+  createdAt     DateTime          @default(now())
+
+  // Relations
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ekub          Ekub              @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+/// Ekub Lucky Draw Result Entity
+model DrawResult {
+  id                   String   @id @default(uuid())
+  ekubId               String
+  roundId              String?  @unique
+  roundNumber          Int
+  winnerId             String
+  winnerName           String
+  potAmount            Decimal  @db.Decimal(12, 2)
+  productWon           String?
+  drawDate             DateTime @default(now())
+  eligibleMembersCount Int
+  isEkubClosedNow      Boolean  @default(false)
+  createdAt            DateTime @default(now())
+
+  // Relations
+  ekub                 Ekub     @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+  round                Round?   @relation(fields: [roundId], references: [id], onDelete: SetNull)
+  winner               User     @relation("WinnerUser", fields: [winnerId], references: [id], onDelete: Cascade)
+
+  // FINANCIAL RULE: Only one winner can be selected per round per Ekub
+  @@unique([ekubId, roundNumber])
+  @@map("draw_results")
+}
+
+/// Payment Reminder Notification Entity
+model Reminder {
+  id          String         @id @default(uuid())
+  userId      String
+  ekubId      String
+  roundNumber Int
+  amount      Decimal        @db.Decimal(12, 2)
+  dueDate     DateTime
+  status      ReminderStatus @default(DUE)
+  createdAt   DateTime       @default(now())
+
+  // Relations
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ekub        Ekub           @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+
+  @@map("reminders")
+}
+
+/// System In-App Notification Entity
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+/// Audit Trail Log Event Entity
+model AuditEvent {
+  id          String   @id @default(uuid())
+  ekubId      String
+  title       String
+  description String
+  iconName    String   @default("history")
+  timestamp   DateTime @default(now())
+
+  // Relations
+  ekub        Ekub     @relation(fields: [ekubId], references: [id], onDelete: Cascade)
+
+  @@map("audit_events")
+}

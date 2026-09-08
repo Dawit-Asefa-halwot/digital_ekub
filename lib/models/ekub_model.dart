@@ -1,7 +1,8 @@
 import 'member_model.dart';
 import 'schedule_model.dart';
+import 'audit_event_model.dart';
 
-/// Main Ekub Model supporting both Cash and In-Kind rotating savings groups.
+/// Main Ekub Model supporting Cash and In-Kind rotating savings groups.
 class EkubModel {
   final String id;
   final String name;
@@ -19,8 +20,11 @@ class EkubModel {
   DateTime nextDrawDate;
   bool isJoined;
   bool isCompleted;
+  bool isClosed;
   final List<MemberModel> members;
   final List<ScheduleEntryModel> schedule;
+  final List<String> wonMemberIds; // Track members who have won a draw
+  final List<AuditEventModel> auditLogs;
 
   // In-Kind specific product fields
   final String? productName;
@@ -45,13 +49,17 @@ class EkubModel {
     required this.nextDrawDate,
     this.isJoined = false,
     this.isCompleted = false,
+    this.isClosed = false,
     required this.members,
     required this.schedule,
+    List<String>? wonMemberIds,
+    List<AuditEventModel>? auditLogs,
     this.productName,
     this.productDescription,
     this.productValue,
     this.productIcon,
-  });
+  })  : wonMemberIds = wonMemberIds ?? [],
+        auditLogs = auditLogs ?? [];
 
   /// Copy helper to mutate state cleanly
   EkubModel copyWith({
@@ -60,6 +68,10 @@ class EkubModel {
     double? totalPot,
     int? currentRound,
     String? nextRecipient,
+    bool? isCompleted,
+    bool? isClosed,
+    List<String>? wonMemberIds,
+    List<AuditEventModel>? auditLogs,
   }) {
     return EkubModel(
       id: id,
@@ -77,9 +89,12 @@ class EkubModel {
       nextRecipient: nextRecipient ?? this.nextRecipient,
       nextDrawDate: nextDrawDate,
       isJoined: isJoined ?? this.isJoined,
-      isCompleted: isCompleted,
+      isCompleted: isCompleted ?? this.isCompleted,
+      isClosed: isClosed ?? this.isClosed,
       members: members,
       schedule: schedule,
+      wonMemberIds: wonMemberIds ?? this.wonMemberIds,
+      auditLogs: auditLogs ?? this.auditLogs,
       productName: productName,
       productDescription: productDescription,
       productValue: productValue,

@@ -1,0 +1,16 @@
+# Dependency directories
+node_modules/
+
+# Production build output
+dist/
+
+# Environment variables (NEVER commit credentials)
+.env
+.env.local
+.env.*.local
+
+# IDE & OS files
+.DS_Store
+.idea/
+.vscode/
+*.log

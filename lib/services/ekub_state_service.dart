@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
 import '../models/ekub_model.dart';
@@ -5,12 +6,11 @@ import '../models/member_model.dart';
 import '../models/contribution_model.dart';
 import '../models/transaction_model.dart';
 import '../models/schedule_model.dart';
+import '../models/audit_event_model.dart';
 import '../data/mock_data.dart';
 
 /// Central state management service for Digital Ekub prototype.
-/// Extends ChangeNotifier to provide reactive state updates across all screens.
 class EkubStateService extends ChangeNotifier {
-  // Singleton pattern for simple application access
   static final EkubStateService instance = EkubStateService._internal();
   EkubStateService._internal();
 
@@ -42,32 +42,25 @@ class EkubStateService extends ChangeNotifier {
   // Filtered Ekubs getter
   List<EkubModel> get filteredEkubs {
     return _ekubs.where((ekub) {
-      // 1. Search Query Filter
       final matchesSearch = _searchQuery.isEmpty ||
           ekub.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
           ekub.description.toLowerCase().contains(_searchQuery.toLowerCase()) ||
           (ekub.productName != null && ekub.productName!.toLowerCase().contains(_searchQuery.toLowerCase()));
 
-      // 2. Category Filter
       final matchesCategory = _selectedCategory == 'All' || ekub.category == _selectedCategory;
-
-      // 3. Frequency Filter
       final matchesFrequency = _selectedFrequencyFilter == 'All' || ekub.frequency == _selectedFrequencyFilter;
 
       return matchesSearch && matchesCategory && matchesFrequency;
     }).toList();
   }
 
-  // Joined Ekubs getter
   List<EkubModel> get joinedEkubs => _ekubs.where((e) => e.isJoined).toList();
 
-  // Navigation controller helper
   void setTabIndex(int index) {
     _selectedTabIndex = index;
     notifyListeners();
   }
 
-  // Search updater
   void setSearchQuery(String query) {
     _searchQuery = query;
     notifyListeners();
@@ -78,7 +71,6 @@ class EkubStateService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Category selection
   void selectCategory(String category) {
     _selectedCategory = category;
     notifyListeners();
@@ -89,21 +81,26 @@ class EkubStateService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// CRITICAL SAFEGUARD: Prevents duplicate contributions for same user + Ekub + round
+  bool isAlreadyPaid(String userId, String ekubId, int roundNumber) {
+    return _contributions.any(
+      (c) => c.ekubId == ekubId && c.roundNumber == roundNumber && c.status == 'Paid',
+    );
+  }
+
   /// Action: Join an Ekub
   bool joinEkub(String ekubId) {
     final index = _ekubs.indexWhere((e) => e.id == ekubId);
     if (index == -1) return false;
 
     final ekub = _ekubs[index];
-    if (ekub.isJoined) return false; // Duplicate join prevention
+    if (ekub.isJoined || ekub.isClosed) return false; // Duplicate join / Closed Ekub prevention
 
-    // Update Ekub model state
     final updatedEkub = ekub.copyWith(
       isJoined: true,
       joinedMembersCount: ekub.joinedMembersCount + 1,
     );
 
-    // Add current user to member list
     updatedEkub.members.add(
       MemberModel(
         id: _user.id,
@@ -115,23 +112,36 @@ class EkubStateService extends ChangeNotifier {
       ),
     );
 
+    // Add Audit Log
+    updatedEkub.auditLogs.insert(
+      0,
+      AuditEventModel(
+        id: 'aud_${DateTime.now().millisecondsSinceEpoch}',
+        ekubId: ekub.id,
+        title: 'Member Joined',
+        description: '${_user.name} joined ${ekub.name}.',
+        timestamp: DateTime.now(),
+        icon: Icons.person_add_rounded,
+      ),
+    );
+
     _ekubs[index] = updatedEkub;
 
-    // Create local join transaction
     final newTxn = TransactionModel(
       id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+      referenceId: 'TXN-TEL-${Random().nextInt(89999) + 10000}',
+      userId: _user.id,
       ekubId: ekub.id,
       ekubName: ekub.name,
       type: 'Ekub Membership Joined',
       amount: -ekub.contributionAmount,
       date: DateTime.now(),
-      status: 'Successful',
+      status: 'successful',
       description: 'Joined ${ekub.name}. Initial round deposit recorded locally.',
     );
 
     _transactions.insert(0, newTxn);
 
-    // Create initial contribution entry
     _contributions.insert(
       0,
       ContributionModel(
@@ -198,6 +208,16 @@ class EkubStateService extends ChangeNotifier {
           status: 'Current',
         ),
       ],
+      auditLogs: [
+        AuditEventModel(
+          id: 'aud_${DateTime.now().millisecondsSinceEpoch}',
+          ekubId: 'ekub_${DateTime.now().millisecondsSinceEpoch}',
+          title: 'Ekub Created',
+          description: '$name created by ${_user.name}.',
+          timestamp: DateTime.now(),
+          icon: Icons.create_new_folder_rounded,
+        ),
+      ],
       productName: productName,
       productDescription: isKind ? description : null,
       productValue: productValue,
@@ -206,15 +226,16 @@ class EkubStateService extends ChangeNotifier {
 
     _ekubs.insert(0, newEkub);
 
-    // Create creation transaction
     final newTxn = TransactionModel(
       id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+      referenceId: 'TXN-CBE-${Random().nextInt(89999) + 10000}',
+      userId: _user.id,
       ekubId: newEkub.id,
       ekubName: newEkub.name,
       type: 'Ekub Creation Fee',
       amount: -contributionAmount,
       date: DateTime.now(),
-      status: 'Successful',
+      status: 'successful',
       description: 'Created new $category Ekub: ${newEkub.name}. Initial round deposit recorded.',
     );
 
@@ -224,40 +245,37 @@ class EkubStateService extends ChangeNotifier {
     return newEkub;
   }
 
-  /// Action: Record a Contribution
-  bool recordContribution({
+  /// Action: Record Contribution with Payment Service Result
+  void recordContributionWithTxn({
     required String ekubId,
     required double amount,
+    required TransactionModel transaction,
   }) {
     final index = _ekubs.indexWhere((e) => e.id == ekubId);
-    if (index == -1) return false;
+    if (index == -1) return;
 
     final ekub = _ekubs[index];
 
-    // Update total pot in state
     final updatedEkub = ekub.copyWith(
       totalPot: ekub.totalPot + amount,
     );
-    _ekubs[index] = updatedEkub;
 
-    final txnId = 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
-
-    // Record Transaction
-    _transactions.insert(
+    // Audit log
+    updatedEkub.auditLogs.insert(
       0,
-      TransactionModel(
-        id: txnId,
+      AuditEventModel(
+        id: 'aud_${DateTime.now().millisecondsSinceEpoch}',
         ekubId: ekub.id,
-        ekubName: ekub.name,
-        type: 'Contribution Deposit',
-        amount: -amount,
-        date: DateTime.now(),
-        status: 'Successful',
-        description: 'Round ${ekub.currentRound} contribution deposit for ${ekub.name}.',
+        title: 'Contribution Recorded',
+        description: '${_user.name} paid ${amount.toStringAsFixed(0)} ETB for Round ${ekub.currentRound} via ${transaction.paymentMethod.name}.',
+        timestamp: DateTime.now(),
+        icon: Icons.check_circle_outline_rounded,
       ),
     );
 
-    // Record Contribution
+    _ekubs[index] = updatedEkub;
+    _transactions.insert(0, transaction);
+
     _contributions.insert(
       0,
       ContributionModel(
@@ -268,17 +286,43 @@ class EkubStateService extends ChangeNotifier {
         amount: amount,
         date: DateTime.now(),
         status: 'Paid',
-        transactionId: txnId,
+        transactionId: transaction.id,
       ),
     );
 
     notifyListeners();
-    return true;
   }
 
-  // Profile actions
-  void toggleNotifications(bool enabled) {
-    _user.notificationsEnabled = enabled;
+  /// Add failed or arbitrary transaction
+  void addTransaction(TransactionModel txn) {
+    _transactions.insert(0, txn);
+    notifyListeners();
+  }
+
+  /// Update Ekub after Lucky Draw Execution
+  void updateEkubDrawResult({
+    required String ekubId,
+    required MemberModel winner,
+    required List<String> updatedWonIds,
+    required bool isClosedNow,
+    required AuditEventModel auditEvent,
+  }) {
+    final index = _ekubs.indexWhere((e) => e.id == ekubId);
+    if (index == -1) return;
+
+    final ekub = _ekubs[index];
+
+    final updatedEkub = ekub.copyWith(
+      currentRound: isClosedNow ? ekub.currentRound : ekub.currentRound + 1,
+      nextRecipient: isClosedNow ? 'None (Ekub Closed)' : winner.name,
+      isCompleted: isClosedNow,
+      isClosed: isClosedNow,
+      wonMemberIds: updatedWonIds,
+    );
+
+    updatedEkub.auditLogs.insert(0, auditEvent);
+    _ekubs[index] = updatedEkub;
+
     notifyListeners();
   }
 }
