@@ -234,6 +234,8 @@ model Transaction {
   referenceId   String            @unique // Unique payment reference ID (e.g. TXN-TEL-89210)
   userId        String
   ekubId        String
+  roundId       String?
+  contributionId String?
   amount        Decimal           @db.Decimal(12, 2)
   type          TransactionType
   paymentMethod PaymentMethod     @default(TELEBIRR)
