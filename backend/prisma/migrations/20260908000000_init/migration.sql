@@ -116,6 +116,8 @@ CREATE TABLE "transactions" (
     "referenceId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "ekubId" TEXT NOT NULL,
+    "roundId" TEXT,
+    "contributionId" TEXT,
     "amount" DECIMAL(12,2) NOT NULL,
     "type" "TransactionType" NOT NULL,
     "paymentMethod" "PaymentMethod" NOT NULL DEFAULT 'TELEBIRR',
