@@ -6,9 +6,9 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
 
-  // Configure CORS for Flutter Web & Mobile Clients
+  // Configure CORS for Flutter Web & Mobile Clients (Render compatible)
   app.enableCors({
-    origin: '*',
+    origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
@@ -26,9 +26,9 @@ async function bootstrap() {
   );
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
-  logger.log(`🚀 Digital Ekub REST API Server is running on: http://localhost:${port}/api/v1`);
-  logger.log(`🏥 Health Check Endpoint available at: http://localhost:${port}/api/v1/health`);
+  await app.listen(port, '0.0.0.0');
+  logger.log(`🚀 Digital Ekub REST API Server is running on port ${port} (0.0.0.0)`);
+  logger.log(`🏥 Health Check Endpoint available at: /api/v1/health`);
 }
 
 bootstrap();

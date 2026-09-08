@@ -1,15 +1,19 @@
-import 'package:flutter/foundation.dart';
-
 class ApiConfig {
   /// Centralized REST API Base URL
-  /// For Local Web / Windows Desktop: http://localhost:3000/api/v1
-  /// For Android Emulator: http://10.0.2.2:3000/api/v1
-  static const String webBaseUrl = 'http://localhost:3000/api/v1';
-  static const String androidBaseUrl = 'http://10.0.2.2:3000/api/v1';
+  /// Production Deployed Render API: https://digital-ekub-api.onrender.com/api/v1
+  /// Local NestJS REST API: http://localhost:3000/api/v1
+  static const String renderBaseUrl = 'https://digital-ekub-api.onrender.com/api/v1';
+  static const String localBaseUrl = 'http://localhost:3000/api/v1';
+
+  /// Toggle true to connect Flutter application to deployed Render backend
+  /// Set false for local development backend (http://localhost:3000/api/v1)
+  static bool useRenderApi = true;
 
   static String get baseUrl {
-    if (kIsWeb) return webBaseUrl;
-    return webBaseUrl; // Default to localhost for desktop/web
+    if (useRenderApi) {
+      return renderBaseUrl;
+    }
+    return localBaseUrl;
   }
 
   /// In-memory storage for current session JWT token
