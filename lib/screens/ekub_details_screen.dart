@@ -143,8 +143,8 @@ class EkubDetailsScreen extends StatelessWidget {
                             label: Text('Join Ekub (${currentEkub.contributionAmount.toStringAsFixed(0)} ETB)'),
                             onPressed: currentEkub.joinedMembersCount >= currentEkub.maxMembers
                                 ? null
-                                : () {
-                                    final success = EkubStateService.instance.joinEkub(currentEkub.id);
+                                : () async {
+                                    final success = await EkubStateService.instance.joinEkub(currentEkub.id);
                                     if (success) {
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(

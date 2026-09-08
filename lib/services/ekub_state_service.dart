@@ -1,33 +1,52 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
 import '../models/ekub_model.dart';
 import '../models/member_model.dart';
 import '../models/contribution_model.dart';
 import '../models/transaction_model.dart';
-import '../models/schedule_model.dart';
 import '../models/audit_event_model.dart';
+import '../models/payment_method_enum.dart';
 import '../data/mock_data.dart';
+import 'ekub_api_service.dart';
+import 'contribution_api_service.dart';
+import 'payment_api_service.dart';
+import 'notification_api_service.dart';
+import 'reminder_api_service.dart';
+import 'api_service.dart';
 
-/// Central state management service for Digital Ekub prototype.
+/// Central State Management Service connecting Flutter Application to NestJS REST API
 class EkubStateService extends ChangeNotifier {
   static final EkubStateService instance = EkubStateService._internal();
-  EkubStateService._internal();
+  EkubStateService._internal() {
+    refreshAllData();
+  }
 
   int _selectedTabIndex = 0;
   int get selectedTabIndex => _selectedTabIndex;
 
-  final UserModel _user = MockData.currentUser;
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
+
+  String? _errorMessage;
+  String? get errorMessage => _errorMessage;
+
+  UserModel _user = MockData.currentUser;
   UserModel get user => _user;
 
-  final List<EkubModel> _ekubs = List.from(MockData.initialEkubs);
+  List<EkubModel> _ekubs = List.from(MockData.initialEkubs);
   List<EkubModel> get allEkubs => List.unmodifiable(_ekubs);
 
-  final List<TransactionModel> _transactions = List.from(MockData.initialTransactions);
+  List<TransactionModel> _transactions = List.from(MockData.initialTransactions);
   List<TransactionModel> get transactions => List.unmodifiable(_transactions);
 
-  final List<ContributionModel> _contributions = List.from(MockData.initialContributions);
+  List<ContributionModel> _contributions = List.from(MockData.initialContributions);
   List<ContributionModel> get contributions => List.unmodifiable(_contributions);
+
+  List<Map<String, dynamic>> _notifications = [];
+  List<Map<String, dynamic>> get notifications => List.unmodifiable(_notifications);
+
+  List<Map<String, dynamic>> _reminders = [];
+  List<Map<String, dynamic>> get reminders => List.unmodifiable(_reminders);
 
   // Search & Filter state
   String _searchQuery = '';
@@ -47,8 +66,8 @@ class EkubStateService extends ChangeNotifier {
           ekub.description.toLowerCase().contains(_searchQuery.toLowerCase()) ||
           (ekub.productName != null && ekub.productName!.toLowerCase().contains(_searchQuery.toLowerCase()));
 
-      final matchesCategory = _selectedCategory == 'All' || ekub.category == _selectedCategory;
-      final matchesFrequency = _selectedFrequencyFilter == 'All' || ekub.frequency == _selectedFrequencyFilter;
+      final matchesCategory = _selectedCategory == 'All' || ekub.category.toUpperCase() == _selectedCategory.toUpperCase();
+      final matchesFrequency = _selectedFrequencyFilter == 'All' || ekub.frequency.toUpperCase() == _selectedFrequencyFilter.toUpperCase();
 
       return matchesSearch && matchesCategory && matchesFrequency;
     }).toList();
@@ -63,105 +82,171 @@ class EkubStateService extends ChangeNotifier {
 
   void setSearchQuery(String query) {
     _searchQuery = query;
+    fetchEkubsFromApi();
     notifyListeners();
   }
 
   void clearSearch() {
     _searchQuery = '';
+    fetchEkubsFromApi();
     notifyListeners();
   }
 
   void selectCategory(String category) {
     _selectedCategory = category;
+    fetchEkubsFromApi();
     notifyListeners();
   }
 
   void setFrequencyFilter(String frequency) {
     _selectedFrequencyFilter = frequency;
+    fetchEkubsFromApi();
     notifyListeners();
   }
 
-  /// CRITICAL SAFEGUARD: Prevents duplicate contributions for same user + Ekub + round
-  bool isAlreadyPaid(String userId, String ekubId, int roundNumber) {
-    return _contributions.any(
-      (c) => c.ekubId == ekubId && c.roundNumber == roundNumber && c.status == 'Paid',
-    );
-  }
-
-  /// Action: Join an Ekub
-  bool joinEkub(String ekubId) {
-    final index = _ekubs.indexWhere((e) => e.id == ekubId);
-    if (index == -1) return false;
-
-    final ekub = _ekubs[index];
-    if (ekub.isJoined || ekub.isClosed) return false; // Duplicate join / Closed Ekub prevention
-
-    final updatedEkub = ekub.copyWith(
-      isJoined: true,
-      joinedMembersCount: ekub.joinedMembersCount + 1,
-    );
-
-    updatedEkub.members.add(
-      MemberModel(
-        id: _user.id,
-        name: '${_user.name} (You)',
-        turnNumber: updatedEkub.joinedMembersCount,
-        hasReceivedPot: false,
-        paymentStatus: 'Paid',
-        amountContributed: updatedEkub.contributionAmount,
-      ),
-    );
-
-    // Add Audit Log
-    updatedEkub.auditLogs.insert(
-      0,
-      AuditEventModel(
-        id: 'aud_${DateTime.now().millisecondsSinceEpoch}',
-        ekubId: ekub.id,
-        title: 'Member Joined',
-        description: '${_user.name} joined ${ekub.name}.',
-        timestamp: DateTime.now(),
-        icon: Icons.person_add_rounded,
-      ),
-    );
-
-    _ekubs[index] = updatedEkub;
-
-    final newTxn = TransactionModel(
-      id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-      referenceId: 'TXN-TEL-${Random().nextInt(89999) + 10000}',
-      userId: _user.id,
-      ekubId: ekub.id,
-      ekubName: ekub.name,
-      type: 'Ekub Membership Joined',
-      amount: -ekub.contributionAmount,
-      date: DateTime.now(),
-      status: 'successful',
-      description: 'Joined ${ekub.name}. Initial round deposit recorded locally.',
-    );
-
-    _transactions.insert(0, newTxn);
-
-    _contributions.insert(
-      0,
-      ContributionModel(
-        id: 'cnt_${DateTime.now().millisecondsSinceEpoch}',
-        ekubId: ekub.id,
-        ekubName: ekub.name,
-        roundNumber: ekub.currentRound,
-        amount: ekub.contributionAmount,
-        date: DateTime.now(),
-        status: 'Paid',
-        transactionId: newTxn.id,
-      ),
-    );
-
+  /// Refresh all data from NestJS REST API
+  Future<void> refreshAllData() async {
+    _isLoading = true;
+    _errorMessage = null;
     notifyListeners();
-    return true;
+
+    try {
+      await Future.wait([
+        fetchEkubsFromApi(),
+        fetchUserContributionsFromApi(),
+        fetchUserTransactionsFromApi(),
+        fetchNotificationsFromApi(),
+        fetchRemindersFromApi(),
+      ]);
+    } catch (e) {
+      _errorMessage = e.toString();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
-  /// Action: Create a new Ekub locally
-  EkubModel createEkub({
+  /// Fetch Ekubs from NestJS REST API (`GET /ekubs`)
+  Future<void> fetchEkubsFromApi() async {
+    try {
+      final apiEkubs = await EkubApiService.discoverEkubs(
+        search: _searchQuery.isNotEmpty ? _searchQuery : null,
+        category: _selectedCategory != 'All' ? _selectedCategory : null,
+        frequency: _selectedFrequencyFilter != 'All' ? _selectedFrequencyFilter : null,
+      );
+
+      if (apiEkubs.isNotEmpty) {
+        _ekubs = apiEkubs;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// Fetch User Contributions from NestJS REST API (`GET /contributions/me`)
+  Future<void> fetchUserContributionsFromApi() async {
+    try {
+      final data = await ContributionApiService.getUserContributions();
+      if (data.isNotEmpty) {
+        _contributions = data.map((json) {
+          final ekub = json['ekub'] as Map<String, dynamic>?;
+          return ContributionModel(
+            id: json['id'] as String,
+            ekubId: json['ekubId'] as String,
+            ekubName: ekub?['name'] as String? ?? 'Ekub Group',
+            roundNumber: json['roundNumber'] as int? ?? 1,
+            amount: double.tryParse(json['amount'].toString()) ?? 0.0,
+            date: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
+            status: json['status'] == 'PAID' || json['status'] == 'SUCCESSFUL' ? 'Paid' : 'Pending',
+            transactionId: json['transactionId'] as String? ?? 'TXN-${json['id']}',
+          );
+        }).toList();
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// Fetch User Transactions from NestJS REST API (`GET /payments/me`)
+  Future<void> fetchUserTransactionsFromApi() async {
+    try {
+      final data = await PaymentApiService.getUserTransactions();
+      if (data.isNotEmpty) {
+        _transactions = data.map((json) {
+          final ekub = json['ekub'] as Map<String, dynamic>?;
+          final methodStr = json['paymentMethod']?.toString() ?? 'TELEBIRR';
+          PaymentMethod method = PaymentMethod.telebirr;
+          if (methodStr.contains('CBE')) method = PaymentMethod.cbeBirr;
+          if (methodStr.contains('BANK')) method = PaymentMethod.bankTransfer;
+
+          return TransactionModel(
+            id: json['id'] as String,
+            referenceId: json['referenceId'] as String? ?? 'TXN-REF',
+            userId: json['userId'] as String? ?? '',
+            ekubId: json['ekubId'] as String? ?? '',
+            ekubName: ekub?['name'] as String? ?? 'Ekub Group',
+            type: json['type']?.toString() ?? 'Deposit',
+            amount: double.tryParse(json['amount'].toString()) ?? 0.0,
+            date: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
+            status: json['status']?.toString().toLowerCase() ?? 'successful',
+            paymentMethod: method,
+            description: json['description'] as String? ?? 'Payment transaction',
+          );
+        }).toList();
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// Fetch Notifications from NestJS REST API (`GET /notifications/me`)
+  Future<void> fetchNotificationsFromApi() async {
+    try {
+      final data = await NotificationApiService.getUserNotifications();
+      _notifications = data;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// Fetch Reminders from NestJS REST API (`GET /reminders/me`)
+  Future<void> fetchRemindersFromApi() async {
+    try {
+      final data = await ReminderApiService.getUserReminders();
+      _reminders = data;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// Mark Notification as Read
+  Future<void> markNotificationRead(String id) async {
+    try {
+      await NotificationApiService.markAsRead(id);
+      await fetchNotificationsFromApi();
+    } catch (_) {}
+  }
+
+  /// Mark All Notifications as Read
+  Future<void> markAllNotificationsRead() async {
+    try {
+      await NotificationApiService.markAllAsRead();
+      await fetchNotificationsFromApi();
+    } catch (_) {}
+  }
+
+  /// Action: Join an Ekub via REST API (`POST /ekubs/:id/join`)
+  Future<bool> joinEkub(String ekubId) async {
+    try {
+      await EkubApiService.joinEkub(ekubId);
+      await refreshAllData();
+      return true;
+    } on ApiException catch (e) {
+      _errorMessage = e.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Action: Create a new Ekub via REST API (`POST /ekubs`)
+  Future<EkubModel?> createEkub({
     required String name,
     required String category,
     required double contributionAmount,
@@ -171,135 +256,77 @@ class EkubStateService extends ChangeNotifier {
     String? productName,
     double? productValue,
     String? productIcon,
-  }) {
-    final isKind = category == 'In-kind';
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'name': name,
+        'description': description,
+        'category': category == 'In-kind' ? 'IN_KIND' : category.toUpperCase(),
+        'type': category == 'In-kind' ? 'IN_KIND' : 'CASH',
+        'contributionAmount': contributionAmount,
+        'frequency': frequency.toUpperCase(),
+        'maxMembers': maxMembers,
+        'totalRounds': maxMembers,
+      };
 
-    final newEkub = EkubModel(
-      id: 'ekub_${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
-      description: description,
-      category: category,
-      isInKind: isKind,
-      contributionAmount: contributionAmount,
-      frequency: frequency,
-      maxMembers: maxMembers,
-      joinedMembersCount: 1,
-      currentRound: 1,
-      totalRounds: maxMembers,
-      totalPot: isKind ? (productValue ?? contributionAmount * maxMembers) : contributionAmount * maxMembers,
-      nextRecipient: '${_user.name} (You)',
-      nextDrawDate: DateTime.now().add(const Duration(days: 7)),
-      isJoined: true,
-      members: [
-        MemberModel(
-          id: _user.id,
-          name: '${_user.name} (You)',
-          turnNumber: 1,
-          hasReceivedPot: false,
-          paymentStatus: 'Paid',
-          amountContributed: contributionAmount,
-        ),
-      ],
-      schedule: [
-        ScheduleEntryModel(
-          roundNumber: 1,
-          date: DateTime.now().add(const Duration(days: 7)),
-          recipientName: '${_user.name} (You)',
-          status: 'Current',
-        ),
-      ],
-      auditLogs: [
-        AuditEventModel(
-          id: 'aud_${DateTime.now().millisecondsSinceEpoch}',
-          ekubId: 'ekub_${DateTime.now().millisecondsSinceEpoch}',
-          title: 'Ekub Created',
-          description: '$name created by ${_user.name}.',
-          timestamp: DateTime.now(),
-          icon: Icons.create_new_folder_rounded,
-        ),
-      ],
-      productName: productName,
-      productDescription: isKind ? description : null,
-      productValue: productValue,
-      productIcon: productIcon,
-    );
+      if (category == 'In-kind') {
+        body['productName'] = productName ?? name;
+        body['productDescription'] = description;
+        body['productValue'] = productValue ?? (contributionAmount * maxMembers);
+        body['productImageUrl'] = productIcon ?? 'assets/products/samsung_tv.png';
+      }
 
-    _ekubs.insert(0, newEkub);
-
-    final newTxn = TransactionModel(
-      id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-      referenceId: 'TXN-CBE-${Random().nextInt(89999) + 10000}',
-      userId: _user.id,
-      ekubId: newEkub.id,
-      ekubName: newEkub.name,
-      type: 'Ekub Creation Fee',
-      amount: -contributionAmount,
-      date: DateTime.now(),
-      status: 'successful',
-      description: 'Created new $category Ekub: ${newEkub.name}. Initial round deposit recorded.',
-    );
-
-    _transactions.insert(0, newTxn);
-
-    notifyListeners();
-    return newEkub;
+      final data = await ApiService.post('/ekubs', body: body);
+      final createdModel = EkubModel.fromJson(data as Map<String, dynamic>);
+      await refreshAllData();
+      return createdModel;
+    } on ApiException catch (e) {
+      _errorMessage = e.message;
+      notifyListeners();
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
-  /// Action: Record Contribution with Payment Service Result
-  void recordContributionWithTxn({
+  /// Action: Record Contribution & Payment via REST API (`POST /ekubs/:id/contributions` & `POST /payments`)
+  Future<bool> processContributionAndPayment({
     required String ekubId,
     required double amount,
-    required TransactionModel transaction,
-  }) {
-    final index = _ekubs.indexWhere((e) => e.id == ekubId);
-    if (index == -1) return;
+    required String paymentMethodStr,
+  }) async {
+    try {
+      // 1. Submit contribution deposit to REST API
+      final contribRes = await ContributionApiService.createContribution(ekubId, amount: amount);
+      final contribId = contribRes['id'] as String;
 
-    final ekub = _ekubs[index];
+      // 2. Initiate simulated payment via REST API
+      final paymentMethodEnum = paymentMethodStr.replaceAll(' ', '_').toUpperCase();
+      await PaymentApiService.processPayment(
+        contributionId: contribId,
+        paymentMethod: paymentMethodEnum.contains('TELE') ? 'TELEBIRR' : (paymentMethodEnum.contains('CBE') ? 'CBE_BIRR' : 'BANK_TRANSFER'),
+        simulateOutcome: 'SUCCESS',
+      );
 
-    final updatedEkub = ekub.copyWith(
-      totalPot: ekub.totalPot + amount,
-    );
-
-    // Audit log
-    updatedEkub.auditLogs.insert(
-      0,
-      AuditEventModel(
-        id: 'aud_${DateTime.now().millisecondsSinceEpoch}',
-        ekubId: ekub.id,
-        title: 'Contribution Recorded',
-        description: '${_user.name} paid ${amount.toStringAsFixed(0)} ETB for Round ${ekub.currentRound} via ${transaction.paymentMethod.name}.',
-        timestamp: DateTime.now(),
-        icon: Icons.check_circle_outline_rounded,
-      ),
-    );
-
-    _ekubs[index] = updatedEkub;
-    _transactions.insert(0, transaction);
-
-    _contributions.insert(
-      0,
-      ContributionModel(
-        id: 'cnt_${DateTime.now().millisecondsSinceEpoch}',
-        ekubId: ekub.id,
-        ekubName: ekub.name,
-        roundNumber: ekub.currentRound,
-        amount: amount,
-        date: DateTime.now(),
-        status: 'Paid',
-        transactionId: transaction.id,
-      ),
-    );
-
-    notifyListeners();
+      // 3. Refresh state from backend
+      await refreshAllData();
+      return true;
+    } on ApiException catch (e) {
+      _errorMessage = e.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
-  /// Add failed or arbitrary transaction
-  void addTransaction(TransactionModel txn) {
-    _transactions.insert(0, txn);
-    notifyListeners();
+  /// Check if user has already paid for a specific Ekub round
+  bool isAlreadyPaid(String userIdOrEkubId, [String? ekubId, int? roundNumber]) {
+    final targetEkubId = ekubId ?? userIdOrEkubId;
+    return _contributions.any((c) => c.ekubId == targetEkubId && c.status == 'Paid');
   }
 
-  /// Update Ekub after Lucky Draw Execution
+  /// Update Ekub draw result state locally
   void updateEkubDrawResult({
     required String ekubId,
     required MemberModel winner,
@@ -308,21 +335,15 @@ class EkubStateService extends ChangeNotifier {
     required AuditEventModel auditEvent,
   }) {
     final index = _ekubs.indexWhere((e) => e.id == ekubId);
-    if (index == -1) return;
-
-    final ekub = _ekubs[index];
-
-    final updatedEkub = ekub.copyWith(
-      currentRound: isClosedNow ? ekub.currentRound : ekub.currentRound + 1,
-      nextRecipient: isClosedNow ? 'None (Ekub Closed)' : winner.name,
-      isCompleted: isClosedNow,
-      isClosed: isClosedNow,
-      wonMemberIds: updatedWonIds,
-    );
-
-    updatedEkub.auditLogs.insert(0, auditEvent);
-    _ekubs[index] = updatedEkub;
-
-    notifyListeners();
+    if (index != -1) {
+      final ekub = _ekubs[index];
+      final updatedEkub = ekub.copyWith(
+        wonMemberIds: updatedWonIds,
+        isClosed: isClosedNow,
+        nextRecipient: winner.name,
+      );
+      _ekubs[index] = updatedEkub;
+      notifyListeners();
+    }
   }
 }

@@ -59,9 +59,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 Navigator.pop(context);
-                final success = EkubStateService.instance.joinEkub(ekub.id);
+                final success = await EkubStateService.instance.joinEkub(ekub.id);
                 if (success) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -72,8 +72,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   );
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('⚠️ You are already a member of this Ekub.'),
+                    SnackBar(
+                      content: Text(EkubStateService.instance.errorMessage ?? '⚠️ You are already a member of this Ekub.'),
                       backgroundColor: Colors.orange,
                     ),
                   );

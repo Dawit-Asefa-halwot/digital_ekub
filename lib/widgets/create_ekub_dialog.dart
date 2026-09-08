@@ -36,7 +36,7 @@ class _CreateEkubDialogState extends State<CreateEkubDialog> {
     super.dispose();
   }
 
-  void _submitCreateEkub() {
+  Future<void> _submitCreateEkub() async {
     if (_formKey.currentState!.validate()) {
       final amount = double.parse(_amountController.text.trim());
       final members = int.parse(_membersController.text.trim());
@@ -44,7 +44,7 @@ class _CreateEkubDialogState extends State<CreateEkubDialog> {
           ? double.tryParse(_productValueController.text.trim())
           : null;
 
-      final createdEkub = EkubStateService.instance.createEkub(
+      final createdEkub = await EkubStateService.instance.createEkub(
         name: _nameController.text.trim(),
         category: _category,
         contributionAmount: amount,
@@ -56,18 +56,21 @@ class _CreateEkubDialogState extends State<CreateEkubDialog> {
         productIcon: _category == 'In-kind' ? _productIcon : null,
       );
 
-      Navigator.pop(context);
+      if (mounted) {
+        Navigator.pop(context);
 
-      // Switch to My Ekubs tab
-      EkubStateService.instance.setTabIndex(2);
+        // Switch to My Ekubs tab
+        EkubStateService.instance.setTabIndex(2);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('🎉 Successfully created "${createdEkub.name}" and added to My Ekubs!'),
-          backgroundColor: Colors.green.shade800,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+        final nameStr = createdEkub?.name ?? _nameController.text.trim();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('🎉 Successfully created "$nameStr" and added to My Ekubs!'),
+            backgroundColor: Colors.green.shade800,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 

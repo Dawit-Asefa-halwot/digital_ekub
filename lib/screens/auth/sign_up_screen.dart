@@ -34,11 +34,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
     super.dispose();
   }
 
-  void _handleSignUp() {
+  Future<void> _handleSignUp() async {
     setState(() => _errorMessage = null);
 
     if (_formKey.currentState!.validate()) {
-      final err = AuthService.instance.signUp(
+      final err = await AuthService.instance.signUp(
         name: _nameController.text.trim(),
         email: _emailController.text.trim(),
         phone: _phoneController.text.trim(),

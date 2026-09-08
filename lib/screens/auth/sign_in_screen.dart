@@ -24,11 +24,11 @@ class _SignInScreenState extends State<SignInScreen> {
     super.dispose();
   }
 
-  void _handleSignIn() {
+  Future<void> _handleSignIn() async {
     setState(() => _errorMessage = null);
 
     if (_formKey.currentState!.validate()) {
-      final err = AuthService.instance.signIn(
+      final err = await AuthService.instance.signIn(
         emailOrPhone: _identifierController.text.trim(),
         password: _passwordController.text,
       );

@@ -1,38 +1,12 @@
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
+import 'auth_api_service.dart';
+import 'api_service.dart';
 
-/// Central Authentication and Authorization Service for Digital Ekub prototype.
-/// Manages session authentication state, user registration, local credentials, and user roles.
+/// Central Authentication Service connecting Flutter UI to NestJS REST API & PostgreSQL 18
 class AuthService extends ChangeNotifier {
   static final AuthService instance = AuthService._internal();
-  AuthService._internal() {
-    // Seed default demo credentials for local prototype testing
-    _registerMockUser(
-      email: 'dawit@ekub.et',
-      phone: '0911234567',
-      password: 'password123',
-      user: UserModel(
-        id: 'usr_admin_01',
-        name: 'Dawit Asefa',
-        phone: '+251 91 123 4567',
-        email: 'dawit@ekub.et',
-        role: UserRole.admin,
-      ),
-    );
-
-    _registerMockUser(
-      email: 'abebe@ekub.et',
-      phone: '0922345678',
-      password: 'password123',
-      user: UserModel(
-        id: 'usr_member_02',
-        name: 'Abebe Tadesse',
-        phone: '+251 92 234 5678',
-        email: 'abebe@ekub.et',
-        role: UserRole.member,
-      ),
-    );
-  }
+  AuthService._internal();
 
   bool _isAuthenticated = false;
   bool get isAuthenticated => _isAuthenticated;
@@ -40,94 +14,93 @@ class AuthService extends ChangeNotifier {
   UserModel? _currentUser;
   UserModel? get currentUser => _currentUser;
 
-  // Local mock credentials database: key -> {password, user}
-  final Map<String, Map<String, dynamic>> _userStore = {};
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
 
-  void _registerMockUser({
-    required String email,
-    required String phone,
-    required String password,
-    required UserModel user,
-  }) {
-    final entry = {'password': password, 'user': user};
-    _userStore[email.toLowerCase().trim()] = entry;
-    _userStore[phone.trim()] = entry;
-  }
-
-  /// Sign Up new user locally
-  String? signUp({
+  /// Sign Up new user via NestJS REST API (`POST /auth/register`)
+  Future<String?> signUp({
     required String name,
     required String email,
     required String phone,
     required String password,
     required UserRole role,
-  }) {
-    final cleanEmail = email.toLowerCase().trim();
-    final cleanPhone = phone.trim();
-
-    // Check existing registration
-    if (_userStore.containsKey(cleanEmail)) {
-      return 'An account with this email address already exists.';
-    }
-    if (_userStore.containsKey(cleanPhone)) {
-      return 'An account with this phone number already exists.';
-    }
-
-    final newUser = UserModel(
-      id: 'usr_${DateTime.now().millisecondsSinceEpoch}',
-      name: name.trim(),
-      phone: cleanPhone,
-      email: cleanEmail,
-      role: role,
-    );
-
-    _registerMockUser(
-      email: cleanEmail,
-      phone: cleanPhone,
-      password: password,
-      user: newUser,
-    );
-
-    _currentUser = newUser;
-    _isAuthenticated = true;
-
+  }) async {
+    _isLoading = true;
     notifyListeners();
-    return null; // Success
+
+    try {
+      final res = await AuthApiService.signUp(
+        fullName: name,
+        email: email,
+        phone: phone,
+        password: password,
+      );
+
+      _currentUser = res['user'] as UserModel;
+      _isAuthenticated = true;
+      _isLoading = false;
+      notifyListeners();
+      return null; // Success
+    } on ApiException catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.message;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return 'Registration failed: ${e.toString()}';
+    }
   }
 
-  /// Sign In user locally
-  String? signIn({
+  /// Sign In user via NestJS REST API (`POST /auth/login`)
+  Future<String?> signIn({
     required String emailOrPhone,
     required String password,
-  }) {
-    final key = emailOrPhone.toLowerCase().trim();
-
-    if (!_userStore.containsKey(key)) {
-      return 'No account found with this email or phone number.';
-    }
-
-    final record = _userStore[key]!;
-    final storedPassword = record['password'] as String;
-
-    if (storedPassword != password) {
-      return 'Incorrect password. Please try again.';
-    }
-
-    _currentUser = record['user'] as UserModel;
-    _isAuthenticated = true;
-
+  }) async {
+    _isLoading = true;
     notifyListeners();
-    return null; // Success
+
+    try {
+      final res = await AuthApiService.signIn(
+        emailOrPhone: emailOrPhone,
+        password: password,
+      );
+
+      _currentUser = res['user'] as UserModel;
+      _isAuthenticated = true;
+      _isLoading = false;
+      notifyListeners();
+      return null; // Success
+    } on ApiException catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return e.message;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return 'Authentication failed: ${e.toString()}';
+    }
   }
 
-  /// Log Out user session
+  /// Refresh current authenticated user profile (`GET /auth/me`)
+  Future<void> refreshProfile() async {
+    try {
+      final user = await AuthApiService.getCurrentUser();
+      _currentUser = user;
+      _isAuthenticated = true;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// Sign Out user session & clear JWT token
   void signOut() {
+    AuthApiService.signOut();
     _isAuthenticated = false;
     _currentUser = null;
     notifyListeners();
   }
 
-  /// Switch user role (Helper to easily test Admin vs Member authorization)
+  /// Switch role (for demo testing switch between Member and Admin view)
   void switchRole(UserRole newRole) {
     if (_currentUser != null) {
       _currentUser!.role = newRole;
@@ -135,7 +108,7 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// Toggle notifications for current user
+  /// Toggle notifications
   void toggleNotifications(bool enabled) {
     if (_currentUser != null) {
       _currentUser!.notificationsEnabled = enabled;

@@ -24,6 +24,19 @@ class UserModel {
     this.notificationsEnabled = true,
   });
 
+  factory UserModel.fromJson(Map<String, dynamic> json) {
+    final roleStr = json['role']?.toString().toUpperCase() ?? 'MEMBER';
+    return UserModel(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      phone: json['phone'] as String? ?? '',
+      email: json['email'] as String? ?? '',
+      role: roleStr == 'ADMIN' ? UserRole.admin : UserRole.member,
+      isVerified: json['isVerified'] as bool? ?? true,
+      notificationsEnabled: json['notificationsEnabled'] as bool? ?? true,
+    );
+  }
+
   bool get isAdmin => role == UserRole.admin;
   bool get isMember => role == UserRole.member;
 

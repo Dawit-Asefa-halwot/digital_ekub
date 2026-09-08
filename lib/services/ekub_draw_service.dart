@@ -1,6 +1,5 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import '../models/member_model.dart';
 import '../models/draw_result_model.dart';
 import '../models/audit_event_model.dart';
 import '../services/ekub_state_service.dart';
